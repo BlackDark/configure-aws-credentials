@@ -3,6 +3,7 @@ const aws = require('aws-sdk');
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const proxy = require('proxy-agent');
 
 // The max time that a GitHub action is allowed to run is 6 hours.
 // That seems like a reasonable default to use if no role duration is defined.
@@ -98,8 +99,8 @@ async function assumeRole(params) {
     } catch(error) {
       throw new Error(`Web identity token file could not be read: ${error.message}`);
     }
-    
-  } 
+
+  }
 
   return assumeFunction(assumeRoleRequest)
     .promise()
@@ -224,6 +225,31 @@ function getStsClient(region) {
   });
 }
 
+function configureProxy(inputIgnore, inputProxy) {
+  const proxyFromEnv = process.env.HTTP_PROXY;
+
+  if (inputIgnore) {
+    console.log(`Ignoring proxy configurations.`);
+    return;
+  }
+
+  if (proxyFromEnv || inputProxy) {
+    let proxyToSet = null;
+
+    if (inputProxy){
+      console.log(`Setting proxy from actions input: ${inputProxy}`);
+      proxyToSet = inputProxy;
+    } else {
+      console.log(`Setting proxy from environment: ${proxyFromEnv}`);
+      proxyToSet = proxyFromEnv;
+    }
+
+    aws.config.update({
+      httpOptions: { agent: proxy(proxyToSet) }
+    });
+  }
+}
+
 async function run() {
   try {
     // Get inputs
@@ -239,6 +265,8 @@ async function run() {
     const roleSkipSessionTaggingInput = core.getInput('role-skip-session-tagging', { required: false })|| 'false';
     const roleSkipSessionTagging = roleSkipSessionTaggingInput.toLowerCase() === 'true';
     const webIdentityTokenFile = core.getInput('web-identity-token-file', { required: false })
+    const proxyIgnore = core.getBooleanInput('http-proxy-ignore');
+    const proxyServer = core.getInput('http-proxy', { required: false });
 
     if (!region.match(REGION_REGEX)) {
       throw new Error(`Region is not valid: ${region}`);
@@ -258,6 +286,9 @@ async function run() {
 
       exportCredentials({accessKeyId, secretAccessKey, sessionToken});
     }
+
+    // Configures proxy if found and not ignored
+    configureProxy(proxyIgnore, proxyServer);
 
     // Regardless of whether any source credentials were provided as inputs,
     // validate that the SDK can actually pick up credentials.  This validates
